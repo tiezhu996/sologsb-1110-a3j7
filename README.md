@@ -24,7 +24,7 @@ docker compose down
 | 框架 | Vue 3 + TypeScript（`<script setup>`） |
 | 构建 | Vite 6（`npm run build` 含 `vue-tsc --noEmit` 类型检查） |
 | UI | Element Plus 2 |
-| 路由 | Vue Router 4（5 条业务路由 + 404） |
+| 路由 | Vue Router 4（6 条业务路由 + 404） |
 | 状态 | Pinia（boardStore / chamberStore / lacquerStore / stringingStore） |
 | 存储 | IndexedDB（Dexie，库名 `gbguqin-db`） |
 | 托管 | nginx:alpine（多阶段构建，SPA try_files + gzip） |
@@ -36,6 +36,7 @@ cd frontend
 npm install
 npm run dev      # http://localhost:21810
 npm run build    # 类型检查 + 生产构建
+npm test         # 合并引擎单元测试（esbuild 打包 + 内存假 db，无需浏览器）
 ```
 
 ## 目录结构
@@ -49,13 +50,13 @@ npm run build    # 类型检查 + 生产构建
 │   ├── nginx.conf             # try_files SPA 回退 + gzip
 │   ├── public/favicon.svg
 │   └── src/
-│       ├── types/             # wood-board / sound-chamber / lacquer-layer / stringing（+ ui.ts）
+│       ├── types/             # wood-board / sound-chamber / lacquer-layer / stringing / merge（+ ui.ts）
 │       ├── stores/            # boardStore / chamberStore / lacquerStore / stringingStore
 │       ├── components/common/ # DimensionChart / LayerStack / ToneTextEditor / FilterBar / StatBadge / ProcessTimeline / EmptyPanel
 │       ├── hooks/             # useGuqinFilter / useStageProgress
-│       ├── pages/             # WorkshopBoard / BoardList / ChamberEditor / LacquerLedger / StringingLog（+ NotFound）
+│       ├── pages/             # WorkshopBoard / BoardList / ChamberEditor / LacquerLedger / StringingLog / MergeCenter（+ NotFound）
 │       ├── router/index.ts    # 路由表
-│       └── utils/             # layer.ts / db.ts / export.ts（+ wood.ts / seed.ts / id.ts）
+│       └── utils/             # merge.ts（合档）/ export.ts / db.ts / layer.ts（+ wood.ts / seed.ts / id.ts）
 ```
 
 ## 功能与路由
@@ -67,10 +68,23 @@ npm run build    # 类型检查 + 生产构建
 | `/chambers` | 槽腹尺寸记录 | 纳音/龙池/凤沼三处厚度、槽腹深度、天地柱与龙池凤沼尺寸，SVG 剖面标注 |
 | `/lacquer` | 灰胎髹漆遍次 | 按遍次累加厚度、荫房温湿度窗口校验、层积条与养护天数 |
 | `/stringing` | 上弦与音色评价 | 散音/按音/泛音三段纯文本评语、九德简述、缺陷标记与版本对照 |
+| `/merge` | 备份合并 | 导入对方备份做合档预览、按业务键去重、冲突逐条裁决后再提交 |
+
+## 双人补录的备份合并
+
+两位档案员各在本机补录同一批工序后，用顶栏「导出备份 / 导入合并」合档（`/merge`），**不会**像整库恢复那样清空本机：
+
+- **业务键去重**：板材按板材号、槽腹按琴号、髹漆按琴号+遍次、上弦按琴号+上弦日期。
+- **可预览**：每条导入记录分为 新增（可勾选是否写入）/ 内容一致（折叠展示，自动跳过）/ 冲突（字段级对照表）。日期按“天”比对、记录 id 不参与比对，髹漆累计厚度为派生值也不参与比对。
+- **冲突逐条裁决**：档案员对每条冲突选择「保留本机」或「采用导入」，支持本表/全部批量设置；提交前本机数据完全不动。
+- **处理完才提交**：一个事务内写入，采用导入时沿用本机记录 id 覆盖；髹漆受影响琴自动重算累计厚度。
+- **未决冲突留到下次**：没裁决的冲突不阻断提交，整体持久化到 `mergeConflicts` 表，重新打开 `/merge` 继续处理；本机内容事后已改成与导入一致的会自动消解。
+- **备份带上冲突**：导出 JSON 含 `mergeConflicts` 字段，把备份发给对方即可带着未决冲突流转。
+- 顶栏导出的备份仍可用 `importBackup()` 做整库恢复（明确要整体替换本机档案时才用，会清空四表与未决冲突）。
 
 ## 数据存储说明
 
-- 全部数据存于浏览器 IndexedDB（Dexie，库名 `gbguqin-db`），表：`boards`、`chambers`、`lacquers`、`stringings`、`meta`。
-- `db.version(1)` 建表声明索引；`db.version(2).upgrade(...)` 为髹漆表增加 `[guqinNo+seq]` 复合索引并回填历史厚度。升级前可用顶栏「导出备份」导出全量 JSON。
+- 全部数据存于浏览器 IndexedDB（Dexie，库名 `gbguqin-db`），表：`boards`、`chambers`、`lacquers`、`stringings`、`mergeConflicts`、`meta`。
+- `db.version(1)` 建表声明索引；`db.version(2).upgrade(...)` 为髹漆表增加 `[guqinNo+seq]` 复合索引并回填历史厚度；`db.version(3)` 增加 `mergeConflicts` 表持久化合并且未裁决的冲突。升级前可用顶栏「导出备份」导出全量 JSON（含未决冲突）。
 - 首次打开且表为空时写入一批示例工序档案（`src/utils/seed.ts`）。
 - 容器无状态：不使用数据库服务、不挂载命名卷，`docker compose down` 后数据仍留在浏览器中。
