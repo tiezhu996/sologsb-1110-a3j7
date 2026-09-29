@@ -2,13 +2,15 @@
 import { onMounted, ref } from 'vue';
 import { useRoute } from 'vue-router';
 import { ElMessage } from 'element-plus';
-import { Download } from '@element-plus/icons-vue';
+import { Download, Upload } from '@element-plus/icons-vue';
 import { seedIfEmpty } from './utils/seed';
 import { downloadText, exportBackupJson } from './utils/export';
+import { db } from './utils/db';
 import { useBoardStore } from './stores/boardStore';
 import { useChamberStore } from './stores/chamberStore';
 import { useLacquerStore } from './stores/lacquerStore';
 import { useStringingStore } from './stores/stringingStore';
+import MergeBackupDialog from './components/MergeBackupDialog.vue';
 
 const route = useRoute();
 const boardStore = useBoardStore();
@@ -16,11 +18,18 @@ const chamberStore = useChamberStore();
 const lacquerStore = useLacquerStore();
 const stringingStore = useStringingStore();
 const ready = ref(false);
+const mergeVisible = ref(false);
+const pendingConflictCount = ref(0);
+
+async function refreshPendingCount() {
+  pendingConflictCount.value = await db.mergeQueue.where('resolution').equals('pending').count();
+}
 
 onMounted(async () => {
   try {
     await seedIfEmpty();
     await Promise.all([boardStore.hydrate(), chamberStore.hydrate(), lacquerStore.hydrate(), stringingStore.hydrate()]);
+    await refreshPendingCount();
   } catch (error) {
     ElMessage.error(`本地数据装载失败：${(error as Error).message}`);
   } finally {
@@ -31,7 +40,11 @@ onMounted(async () => {
 async function handleExport() {
   const json = await exportBackupJson();
   downloadText(`gbguqin-backup-${new Date().toISOString().slice(0, 10)}.json`, json);
-  ElMessage.success('已导出 IndexedDB 全量 JSON 备份');
+  ElMessage.success(
+    pendingConflictCount.value > 0
+      ? `已导出全量 JSON 备份（含 ${pendingConflictCount.value} 条未处理冲突）`
+      : '已导出 IndexedDB 全量 JSON 备份',
+  );
 }
 </script>
 
@@ -53,7 +66,14 @@ async function handleExport() {
     <el-container>
       <el-header class="app-header">
         <span class="header-title">{{ (route.meta?.title as string) ?? '古琴斫制工序记录台' }}</span>
-        <el-button :icon="Download" @click="handleExport">导出备份</el-button>
+        <span class="header-actions">
+          <el-badge :hidden="pendingConflictCount === 0" :value="pendingConflictCount" class="merge-badge">
+            <el-button :icon="Upload" @click="mergeVisible = true">
+              合并备份{{ pendingConflictCount > 0 ? `（${pendingConflictCount} 条冲突待处理）` : '' }}
+            </el-button>
+          </el-badge>
+          <el-button :icon="Download" @click="handleExport">导出备份</el-button>
+        </span>
       </el-header>
       <el-main v-loading="!ready" element-loading-text="正在装载本地工序档案…" class="app-main">
         <router-view />
@@ -61,6 +81,8 @@ async function handleExport() {
       <el-footer class="app-footer">数据保存在浏览器 IndexedDB（gbguqin-db），不依赖后端服务</el-footer>
     </el-container>
   </el-container>
+
+  <MergeBackupDialog v-model:visible="mergeVisible" @committed="refreshPendingCount" />
 </template>
 
 <style scoped>
@@ -95,6 +117,14 @@ async function handleExport() {
 .header-title {
   font-weight: 600;
   color: #4a3728;
+}
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.merge-badge {
+  margin-right: 2px;
 }
 .app-main {
   background: #f7f3ed;

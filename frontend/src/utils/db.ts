@@ -3,12 +3,13 @@ import type { WoodBoard } from '../types/wood-board';
 import type { SoundChamber } from '../types/sound-chamber';
 import type { LacquerLayer } from '../types/lacquer-layer';
 import type { Stringing } from '../types/stringing';
+import type { PendingConflict } from '../types/merge';
 
 /** IndexedDB 库名（浏览器本地存储，无后端） */
 export const DB_NAME = 'gbguqin-db';
 
 /** 当前 schema 版本，与 db.version(n) 对应 */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 class GuqinDB extends Dexie {
   boards!: Table<WoodBoard, string>;
@@ -16,6 +17,8 @@ class GuqinDB extends Dexie {
   lacquers!: Table<LacquerLayer, string>;
   stringings!: Table<Stringing, string>;
   meta!: Table<{ key: string; value: string }, string>;
+  /** 未处理完的合并冲突队列（提交后仍未决议的留下，随备份导出） */
+  mergeQueue!: Table<PendingConflict, string>;
 
   constructor() {
     super(DB_NAME);
@@ -49,6 +52,16 @@ class GuqinDB extends Dexie {
             }
           });
       });
+
+    // v3：增加合并冲突队列表 mergeQueue（键 `${table}:${业务键}`），不动历史数据。
+    this.version(3).stores({
+      boards: 'id, boardNo, guqinNo, part, species, grain, receivedAt',
+      chambers: 'id, guqinNo, postPos, carvedAt',
+      lacquers: 'id, guqinNo, seq, [guqinNo+seq], appliedAt',
+      stringings: 'id, guqinNo, stringType, strungAt',
+      meta: 'key',
+      mergeQueue: 'id, table, resolution, queuedAt',
+    });
   }
 }
 
